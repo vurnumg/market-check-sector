@@ -1,0 +1,52 @@
+name: Daily Market Check
+
+on:
+  schedule:
+    - cron: "55 16 * * 1-5"
+      timezone: "Europe/London"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  run-market-check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run market check
+        run: python market_check.py
+
+      - name: Commit updated portfolio
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add portfolio.csv
+          git diff --cached --quiet || git commit -m "Update portfolio stops"
+          git push
+
+      - name: Send email
+        uses: dawidd6/action-send-mail@v6
+        with:
+          server_address: ${{ secrets.MAIL_SERVER }}
+          server_port: ${{ secrets.MAIL_PORT }}
+          secure: true
+          username: ${{ secrets.MAIL_USERNAME }}
+          password: ${{ secrets.MAIL_PASSWORD }}
+          subject: "Daily Market Check"
+          to: ${{ secrets.MAIL_TO }}
+          from: ${{ secrets.MAIL_FROM }}
+          body: "Your email client does not support HTML."
+          html_body: file://market_email.html
