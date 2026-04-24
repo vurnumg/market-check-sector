@@ -11,7 +11,7 @@ import yfinance as yf
 # -------------------------------
 # Settings
 # -------------------------------
-RISK_PER_TRADE = 50.0  # Fixed £ risk per trade
+RISK_PER_TRADE = 100.0  # Fixed £ risk per trade
 PORTFOLIO_FILE = "portfolio.csv"
 UPDATED_PORTFOLIO_FILE = "portfolio.csv"
 PRICE_DECIMALS = 2
