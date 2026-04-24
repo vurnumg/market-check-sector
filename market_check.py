@@ -29,6 +29,7 @@ PRICE_SCALE = {
     "ICSU": 0.01,
     "IUSU": 0.01,
     "IMSU": 0.01,
+    "EWSP": 1,
 }
 
 # Yahoo symbols where the latest close can occasionally be returned in pence
@@ -48,6 +49,7 @@ WATCHLIST: Dict[str, str] = {
     "ICSU": "ICSU.L",
     "IUSU": "IUSU.L",
     "IMSU": "IMSU.L",
+    "EWSP": "EWSP.L",
 }
 
 # Tickers that should use CLOSE-based channels
