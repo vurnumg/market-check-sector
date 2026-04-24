@@ -20,16 +20,15 @@ PRICE_DECIMALS = 2
 # 1.0  = use price as-is
 # 0.01 = divide by 100 because Yahoo price is effectively in pence for cash calcs
 PRICE_SCALE = {
-    "IUIT": 1.0,
-    "IUES": 1.0,
-    "IUFS": 1.0,
-    "IUHC": 1.0,
-    "INDS": 1.0,
-    "IUCD": 1.0,
-    "IUCS": 1.0,
-    "IUSP": 1.0,
-    "IUMS": 1.0,
-    "IUCM": 1.0,
+    "IITU": 0.01,
+    "IESU": 0.01,
+    "UIFS": 0.01,
+    "IHCU": 0.01,
+    "IISU": 0.01,
+    "ICDU": 0.01,
+    "ICSU": 0.01,
+    "IUSU": 0.01,
+    "IMSU": 0.01,
 }
 
 # Yahoo symbols where the latest close can occasionally be returned in pence
@@ -40,16 +39,15 @@ PENCE_ANOMALY_SYMBOLS = set()
 # Watchlist (Trading 212 tickers)
 # -------------------------------
 WATCHLIST: Dict[str, str] = {
-    "IUIT": "IUIT.L",
-    "IUES": "IUES.L",
-    "IUFS": "IUFS.L",
-    "IUHC": "IUHC.L",
-    "INDS": "INDS.L",
-    "IUCD": "IUCD.L",
-    "IUCS": "IUCS.L",
-    "IUSP": "IUSP.L",
-    "IUMS": "IUMS.L",
-    "IUCM": "IUCM.L",
+    "IITU": "IITU.L",
+    "IESU": "IESU.L",
+    "UIFS": "UIFS.L",
+    "IHCU": "IHCU.L",
+    "IISU": "IISU.L",
+    "ICDU": "ICDU.L",
+    "ICSU": "ICSU.L",
+    "IUSU": "IUSU.L",
+    "IMSU": "IMSU.L",
 }
 
 # Tickers that should use CLOSE-based channels
