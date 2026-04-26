@@ -16,6 +16,9 @@ PORTFOLIO_FILE = "portfolio.csv"
 UPDATED_PORTFOLIO_FILE = "portfolio.csv"
 PRICE_DECIMALS = 2
 
+ENTRY_DAYS = 20
+EXIT_DAYS = 10
+
 # Price scale used for sizing and portfolio valuation
 # 1.0  = use price as-is
 # 0.01 = divide by 100 because Yahoo price is effectively in pence for cash calcs
@@ -37,7 +40,7 @@ PENCE_ANOMALY_SYMBOLS = set()
 
 
 # -------------------------------
-# Watchlist (Trading 212 tickers)
+# Watchlist Trading 212 tickers
 # -------------------------------
 WATCHLIST: Dict[str, str] = {
     "IITU": "IITU.L",
@@ -61,8 +64,8 @@ class SignalResult:
     name: str
     symbol: str
     close: float
-    prior_100_high: float
-    prior_50_low: float
+    prior_entry_high: float
+    prior_exit_low: float
     pct_to_breakout: float
     pct_to_sale: float
     entry_trigger: bool
@@ -83,10 +86,10 @@ def normalise_price(value: float | int | None) -> float:
 
 
 # -------------------------------
-# Data download & cleaning
+# Data download and cleaning
 # -------------------------------
 
-def download_ohlc(symbol: str, period: str = "18mo") -> pd.DataFrame:
+def download_ohlc(symbol: str, period: str = "6mo") -> pd.DataFrame:
     df = yf.download(
         symbol,
         period=period,
@@ -110,9 +113,10 @@ def download_ohlc(symbol: str, period: str = "18mo") -> pd.DataFrame:
     df = df.dropna(subset=required).copy()
     df = df.sort_index()
     df = df[~df.index.duplicated(keep="last")]
-    df = df.tail(250)
+    df = df.tail(120)
 
-    if len(df) < 120:
+    minimum_required = max(ENTRY_DAYS, EXIT_DAYS) + 2
+    if len(df) < minimum_required:
         raise ValueError(f"Not enough data for {symbol}")
 
     return df
@@ -146,14 +150,14 @@ def compute_channels(name: str, df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
 
     if name in CLOSE_ONLY:
-        df["prior_100_high"] = df["Close"].rolling(100).max().shift(1)
-        df["prior_50_low"] = df["Close"].rolling(50).min().shift(1)
+        df["prior_entry_high"] = df["Close"].rolling(ENTRY_DAYS).max().shift(1)
+        df["prior_exit_low"] = df["Close"].rolling(EXIT_DAYS).min().shift(1)
     else:
-        df["prior_100_high"] = df["High"].rolling(100).max().shift(1)
-        df["prior_50_low"] = df["Low"].rolling(50).min().shift(1)
+        df["prior_entry_high"] = df["High"].rolling(ENTRY_DAYS).max().shift(1)
+        df["prior_exit_low"] = df["Low"].rolling(EXIT_DAYS).min().shift(1)
 
-    df["prior_100_high"] = df["prior_100_high"].round(PRICE_DECIMALS)
-    df["prior_50_low"] = df["prior_50_low"].round(PRICE_DECIMALS)
+    df["prior_entry_high"] = df["prior_entry_high"].round(PRICE_DECIMALS)
+    df["prior_exit_low"] = df["prior_exit_low"].round(PRICE_DECIMALS)
 
     return df
 
@@ -174,14 +178,14 @@ def convert_price_for_cash_calcs(name: str, value: float) -> float:
 def calculate_position_size(
     name: str,
     close: float,
-    prior_50_low: float,
+    prior_exit_low: float,
     status: str
 ) -> tuple[float | None, int | None, float | None]:
     if status != "BUY":
         return None, None, None
 
     close_for_sizing = convert_price_for_cash_calcs(name, close)
-    stop_for_sizing = convert_price_for_cash_calcs(name, prior_50_low)
+    stop_for_sizing = convert_price_for_cash_calcs(name, prior_exit_low)
 
     risk_per_share = normalise_price(close_for_sizing - stop_for_sizing)
 
@@ -207,20 +211,21 @@ def get_signal(name: str, symbol: str) -> SignalResult:
     last = df.iloc[-1]
 
     close = normalise_price(last["Close"])
-    prior_100_high = normalise_price(last["prior_100_high"])
-    prior_50_low = normalise_price(last["prior_50_low"])
+    prior_entry_high = normalise_price(last["prior_entry_high"])
+    prior_exit_low = normalise_price(last["prior_exit_low"])
+
     pct_change_from_yesterday = (
         float(last["daily_pct_change"]) if pd.notna(last["daily_pct_change"]) else 0.0
     )
 
-    if math.isnan(prior_100_high) or math.isnan(prior_50_low):
+    if math.isnan(prior_entry_high) or math.isnan(prior_exit_low):
         raise ValueError(f"Rolling values unavailable for {symbol}")
 
-    entry_trigger = close > prior_100_high
-    exit_trigger = close < prior_50_low
+    entry_trigger = close > prior_entry_high
+    exit_trigger = close < prior_exit_low
 
-    pct_to_breakout = ((prior_100_high - close) / close) * 100
-    pct_to_sale = ((close - prior_50_low) / prior_50_low) * 100
+    pct_to_breakout = ((prior_entry_high - close) / close) * 100
+    pct_to_sale = ((close - prior_exit_low) / prior_exit_low) * 100
 
     if entry_trigger:
         status = "BUY"
@@ -232,7 +237,7 @@ def get_signal(name: str, symbol: str) -> SignalResult:
     risk_per_share, position_size, capital_required = calculate_position_size(
         name=name,
         close=close,
-        prior_50_low=prior_50_low,
+        prior_exit_low=prior_exit_low,
         status=status,
     )
 
@@ -240,8 +245,8 @@ def get_signal(name: str, symbol: str) -> SignalResult:
         name=name,
         symbol=symbol,
         close=close,
-        prior_100_high=prior_100_high,
-        prior_50_low=prior_50_low,
+        prior_entry_high=prior_entry_high,
+        prior_exit_low=prior_exit_low,
         pct_to_breakout=pct_to_breakout,
         pct_to_sale=pct_to_sale,
         entry_trigger=entry_trigger,
@@ -278,8 +283,8 @@ def run_watchlist(watchlist: Dict[str, str]) -> tuple[pd.DataFrame, List[tuple[s
             "name",
             "symbol",
             "close",
-            "prior_100_high",
-            "prior_50_low",
+            "prior_entry_high",
+            "prior_exit_low",
             "pct_to_breakout",
             "pct_to_sale",
             "pct_change_from_yesterday",
@@ -324,7 +329,7 @@ def calculate_portfolio_metrics(portfolio: pd.DataFrame, signals: pd.DataFrame) 
         return pd.DataFrame(), portfolio.copy()
 
     current_prices = signals[
-        ["symbol", "name", "close", "prior_100_high", "prior_50_low", "status"]
+        ["symbol", "name", "close", "prior_entry_high", "prior_exit_low", "status"]
     ].copy()
 
     merged = portfolio.merge(current_prices, on=["symbol", "name"], how="left")
@@ -336,12 +341,12 @@ def calculate_portfolio_metrics(portfolio: pd.DataFrame, signals: pd.DataFrame) 
     merged["current_price_display"] = pd.to_numeric(merged["close"], errors="coerce").round(PRICE_DECIMALS)
     merged["position_size"] = pd.to_numeric(merged["position_size"], errors="coerce")
     merged["stop_price_display"] = pd.to_numeric(merged["stop_price"], errors="coerce").round(PRICE_DECIMALS)
-    merged["today_d50_display"] = pd.to_numeric(merged["prior_50_low"], errors="coerce").round(PRICE_DECIMALS)
-    merged["today_d100_display"] = pd.to_numeric(merged["prior_100_high"], errors="coerce").round(PRICE_DECIMALS)
+    merged["today_d10_display"] = pd.to_numeric(merged["prior_exit_low"], errors="coerce").round(PRICE_DECIMALS)
+    merged["today_d20_display"] = pd.to_numeric(merged["prior_entry_high"], errors="coerce").round(PRICE_DECIMALS)
 
     merged["updated_stop_price_display"] = merged.apply(
-        lambda row: normalise_price(max(float(row["stop_price_display"]), float(row["today_d50_display"])))
-        if pd.notna(row["stop_price_display"]) and pd.notna(row["today_d50_display"])
+        lambda row: normalise_price(max(float(row["stop_price_display"]), float(row["today_d10_display"])))
+        if pd.notna(row["stop_price_display"]) and pd.notna(row["today_d10_display"])
         else row["stop_price_display"],
         axis=1,
     )
@@ -364,11 +369,11 @@ def calculate_portfolio_metrics(portfolio: pd.DataFrame, signals: pd.DataFrame) 
         axis=1,
     )
 
-    # Score % for 100/50 live positions:
-    # (Current Price - Prior 100 High) / Prior 100 High * 100
+    # Score % for D20/D10 live positions:
+    # (Current Price - Prior D20 High) / Prior D20 High * 100
     merged["score_pct_raw"] = merged.apply(
-        lambda row: ((float(row["current_price_display"]) - float(row["today_d100_display"])) / float(row["today_d100_display"])) * 100
-        if pd.notna(row["current_price_display"]) and pd.notna(row["today_d100_display"]) and float(row["today_d100_display"]) != 0
+        lambda row: ((float(row["current_price_display"]) - float(row["today_d20_display"])) / float(row["today_d20_display"])) * 100
+        if pd.notna(row["current_price_display"]) and pd.notna(row["today_d20_display"]) and float(row["today_d20_display"]) != 0
         else float("nan"),
         axis=1,
     )
@@ -418,7 +423,7 @@ def calculate_portfolio_metrics(portfolio: pd.DataFrame, signals: pd.DataFrame) 
             "current_price_display",
             "position_size",
             "stop_price_display",
-            "today_d50_display",
+            "today_d10_display",
             "updated_stop_price_display",
             "score_pct_raw",
             "rank",
@@ -459,7 +464,7 @@ def format_for_display(df: pd.DataFrame) -> pd.DataFrame:
 
     formatted = df.copy()
 
-    for col in ["close", "prior_100_high", "prior_50_low"]:
+    for col in ["close", "prior_entry_high", "prior_exit_low"]:
         if col in formatted.columns:
             formatted[col] = formatted[col].map(
                 lambda x: f"{float(x):,.2f}" if pd.notna(x) else ""
@@ -495,7 +500,7 @@ def format_portfolio_for_display(df: pd.DataFrame) -> pd.DataFrame:
         "entry_price_display",
         "current_price_display",
         "stop_price_display",
-        "today_d50_display",
+        "today_d10_display",
         "updated_stop_price_display",
     ]:
         if col in formatted.columns:
@@ -647,7 +652,7 @@ def build_actionable_html(df: pd.DataFrame) -> str:
             <td style="padding:10px; border:1px solid #ddd;">{row['name']}</td>
             <td style="padding:10px; border:1px solid #ddd;">{row['symbol']}</td>
             <td style="padding:10px; border:1px solid #ddd; text-align:right;">{row['close']}</td>
-            <td style="padding:10px; border:1px solid #ddd; text-align:right;">{row['prior_50_low']}</td>
+            <td style="padding:10px; border:1px solid #ddd; text-align:right;">{row['prior_exit_low']}</td>
             <td style="padding:10px; border:1px solid #ddd; text-align:right;">{row['risk_per_share']}</td>
             <td style="padding:10px; border:1px solid #ddd; text-align:right;">{row['position_size']}</td>
             <td style="padding:10px; border:1px solid #ddd; text-align:right;">{row['capital_required']}</td>
@@ -665,7 +670,7 @@ def build_actionable_html(df: pd.DataFrame) -> str:
                 <th style="padding:10px; border:1px solid #ddd; text-align:left;">Name</th>
                 <th style="padding:10px; border:1px solid #ddd; text-align:left;">Symbol</th>
                 <th style="padding:10px; border:1px solid #ddd; text-align:right;">Close</th>
-                <th style="padding:10px; border:1px solid #ddd; text-align:right;">Initial / Current D50</th>
+                <th style="padding:10px; border:1px solid #ddd; text-align:right;">Initial / Current D10</th>
                 <th style="padding:10px; border:1px solid #ddd; text-align:right;">Risk / Share</th>
                 <th style="padding:10px; border:1px solid #ddd; text-align:right;">Position Size</th>
                 <th style="padding:10px; border:1px solid #ddd; text-align:right;">Capital Required</th>
@@ -711,7 +716,7 @@ def build_portfolio_html(portfolio_df: pd.DataFrame) -> str:
             <td style="padding:10px; border:1px solid #ddd; text-align:right;">{row['current_price_display']}</td>
             <td style="padding:10px; border:1px solid #ddd; text-align:right;">{row['position_size']}</td>
             <td style="padding:10px; border:1px solid #ddd; text-align:right;">{row['stop_price_display']}</td>
-            <td style="padding:10px; border:1px solid #ddd; text-align:right;">{row['today_d50_display']}</td>
+            <td style="padding:10px; border:1px solid #ddd; text-align:right;">{row['today_d10_display']}</td>
             <td style="padding:10px; border:1px solid #ddd; text-align:right;">{row['updated_stop_price_display']}</td>
             <td style="padding:10px; border:1px solid #ddd; text-align:right;">{row['score_pct_raw']}</td>
             <td style="padding:10px; border:1px solid #ddd; text-align:right;">{row['rank']}</td>
@@ -734,7 +739,7 @@ def build_portfolio_html(portfolio_df: pd.DataFrame) -> str:
                 <th style="padding:10px; border:1px solid #ddd; text-align:right;">Current Price</th>
                 <th style="padding:10px; border:1px solid #ddd; text-align:right;">Size</th>
                 <th style="padding:10px; border:1px solid #ddd; text-align:right;">Stored Stop</th>
-                <th style="padding:10px; border:1px solid #ddd; text-align:right;">Today D50</th>
+                <th style="padding:10px; border:1px solid #ddd; text-align:right;">Today D10</th>
                 <th style="padding:10px; border:1px solid #ddd; text-align:right;">New Stop</th>
                 <th style="padding:10px; border:1px solid #ddd; text-align:right;">Score %</th>
                 <th style="padding:10px; border:1px solid #ddd; text-align:right;">Rank</th>
@@ -779,8 +784,8 @@ def build_full_table_html(df: pd.DataFrame) -> str:
             <td style="padding:10px; border:1px solid #ddd;">{row['name']}</td>
             <td style="padding:10px; border:1px solid #ddd;">{row['symbol']}</td>
             <td style="padding:10px; border:1px solid #ddd; text-align:right;">{row['close']}</td>
-            <td style="padding:10px; border:1px solid #ddd; text-align:right;">{row['prior_100_high']}</td>
-            <td style="padding:10px; border:1px solid #ddd; text-align:right;">{row['prior_50_low']}</td>
+            <td style="padding:10px; border:1px solid #ddd; text-align:right;">{row['prior_entry_high']}</td>
+            <td style="padding:10px; border:1px solid #ddd; text-align:right;">{row['prior_exit_low']}</td>
             <td style="padding:10px; border:1px solid #ddd; text-align:right;">{row['pct_to_breakout']}</td>
             <td style="padding:10px; border:1px solid #ddd; text-align:right;">{row['pct_to_sale']}</td>
             <td style="padding:10px; border:1px solid #ddd; text-align:right;">{row['pct_change_from_yesterday']}</td>
@@ -801,8 +806,8 @@ def build_full_table_html(df: pd.DataFrame) -> str:
                 <th style="padding:10px; border:1px solid #ddd; text-align:left;">Name</th>
                 <th style="padding:10px; border:1px solid #ddd; text-align:left;">Symbol</th>
                 <th style="padding:10px; border:1px solid #ddd; text-align:right;">Close</th>
-                <th style="padding:10px; border:1px solid #ddd; text-align:right;">Prior 100 High</th>
-                <th style="padding:10px; border:1px solid #ddd; text-align:right;">Prior 50 Low</th>
+                <th style="padding:10px; border:1px solid #ddd; text-align:right;">Prior D20 High</th>
+                <th style="padding:10px; border:1px solid #ddd; text-align:right;">Prior D10 Low</th>
                 <th style="padding:10px; border:1px solid #ddd; text-align:right;">% to Breakout</th>
                 <th style="padding:10px; border:1px solid #ddd; text-align:right;">% to Sale</th>
                 <th style="padding:10px; border:1px solid #ddd; text-align:right;">% Change</th>
@@ -851,7 +856,7 @@ def build_html_email(
     <body style="font-family: Arial, sans-serif; color: #222; margin: 0; padding: 24px; background: #f7f7f7;">
         <div style="max-width: 1600px; margin: 0 auto; background: #ffffff; padding: 24px; border: 1px solid #e5e5e5;">
             <h2 style="margin-top: 0;">Daily Market Check</h2>
-            <p style="margin: 0 0 18px 0;">Donchian 100 / 50 watchlist scan with position sizing, trailing stop management and portfolio tracking.</p>
+            <p style="margin: 0 0 18px 0;">Donchian D20 / D10 watchlist scan with position sizing, trailing stop management and portfolio tracking.</p>
 
             {summary_html}
             {actionable_html}
@@ -893,7 +898,7 @@ def main() -> None:
         else:
             print("\nNo stops raised today.")
 
-        print("\n=== UPDATED PORTFOLIO (TO BE SAVED) ===")
+        print("\n=== UPDATED PORTFOLIO TO BE SAVED ===")
         print(updated_portfolio_df.to_string(index=False))
 
         save_updated_portfolio(updated_portfolio_df)
